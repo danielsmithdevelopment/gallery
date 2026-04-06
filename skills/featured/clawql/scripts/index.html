@@ -2,34 +2,27 @@
 (function () {
   const DEFAULT_PROTOCOL = "2024-11-05";
 
-  function parseSecret(raw) {
+  /** Secret = MCP base URL only. Server must attach upstream API auth (e.g. CLAWQL_BEARER_TOKEN on clawql-mcp-http). */
+  function parseMcpUrl(raw) {
     const s = (raw || "").trim();
     if (!s) {
-      throw new Error("Missing secret. Add MCP URL and token in skill settings (see skill description).");
+      throw new Error("Missing secret. Set the full Streamable HTTP MCP URL (e.g. https://host/mcp) in skill settings.");
     }
     if (s.startsWith("{")) {
       let o;
       try {
         o = JSON.parse(s);
       } catch (e) {
-        throw new Error("Invalid JSON in secret. Use two lines (URL then token) or valid JSON.");
+        throw new Error("Invalid JSON in secret. Use a plain URL or {\"mcp_url\":\"https://…/mcp\"}.");
       }
       const url = String(o.mcp_url || o.mcpUrl || o.url || "").trim();
-      const token = String(o.token || o.bearer || "").trim();
       if (!url) throw new Error('JSON secret must include a URL (mcp_url, mcpUrl, or url).');
-      return { mcpUrl: url, token };
+      return url;
     }
-    const lines = s.split(/\r?\n/).map((l) => l.trim());
+    const lines = s.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     const url = (lines[0] || "").trim();
-    const token = lines.slice(1).join("\n").trim();
-    if (!url) throw new Error("First line of secret must be the full MCP URL (e.g. https://host/mcp).");
-    return { mcpUrl: url, token };
-  }
-
-  function authHeader(token) {
-    if (!token) return {};
-    const t = token.startsWith("Bearer ") ? token : "Bearer " + token;
-    return { Authorization: t };
+    if (!url) throw new Error("Secret must be the full MCP URL (e.g. https://host/mcp).");
+    return url;
   }
 
   function parseSseDataMessages(text) {
@@ -50,13 +43,12 @@
     return out;
   }
 
-  async function mcpPost(mcpUrl, body, token, extraHeaders) {
+  async function mcpPost(mcpUrl, body, extraHeaders) {
     const headers = Object.assign(
       {
         Accept: "application/json, text/event-stream",
         "Content-Type": "application/json",
       },
-      authHeader(token),
       extraHeaders || {}
     );
     const res = await fetch(mcpUrl, {
@@ -77,7 +69,7 @@
     return null;
   }
 
-  async function runClawqlSession(mcpUrl, token, toolName, toolArgs) {
+  async function runClawqlSession(mcpUrl, toolName, toolArgs) {
     let rpcId = 0;
     const nextId = () => ++rpcId;
 
@@ -93,7 +85,7 @@
       },
     };
 
-    const first = await mcpPost(mcpUrl, initBody, token, {});
+    const first = await mcpPost(mcpUrl, initBody, {});
     if (!first.res.ok) {
       throw new Error(
         "initialize HTTP " + first.res.status + ": " + (first.text || "").slice(0, 500)
@@ -129,7 +121,6 @@
     const n2 = await mcpPost(
       mcpUrl,
       { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
-      token,
       sessionHeaders
     );
     if (!n2.res.ok && n2.res.status !== 202) {
@@ -144,7 +135,7 @@
       params: { name: toolName, arguments: toolArgs || {} },
     };
 
-    const third = await mcpPost(mcpUrl, callBody, token, sessionHeaders);
+    const third = await mcpPost(mcpUrl, callBody, sessionHeaders);
     if (!third.res.ok) {
       throw new Error(
         "tools/call HTTP " + third.res.status + ": " + (third.text || "").slice(0, 800)
@@ -172,7 +163,7 @@
 
   window["ai_edge_gallery_get_result"] = async (data, secret) => {
     try {
-      const { mcpUrl, token } = parseSecret(secret);
+      const mcpUrl = parseMcpUrl(secret);
       const jsonData = JSON.parse(data || "{}");
       const action = (jsonData.action || "").toLowerCase();
 
@@ -185,7 +176,7 @@
           jsonData.limit != null ? Math.min(50, Math.max(1, Number(jsonData.limit))) : undefined;
         const args = { query };
         if (limit != null && !Number.isNaN(limit)) args.limit = limit;
-        const toolResult = await runClawqlSession(mcpUrl, token, "search", args);
+        const toolResult = await runClawqlSession(mcpUrl, "search", args);
         return JSON.stringify({
           result: JSON.stringify(
             {
@@ -209,7 +200,7 @@
         }
         const toolArgs = { operationId, args };
         if (Array.isArray(jsonData.fields)) toolArgs.fields = jsonData.fields;
-        const toolResult = await runClawqlSession(mcpUrl, token, "execute", toolArgs);
+        const toolResult = await runClawqlSession(mcpUrl, "execute", toolArgs);
         return JSON.stringify({
           result: JSON.stringify(
             {

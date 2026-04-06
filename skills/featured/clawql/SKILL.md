@@ -4,9 +4,9 @@ description: Call a remote ClawQL Streamable HTTP MCP server (search + execute) 
 metadata:
   require-secret: true
   require-secret-description: |
-    Two values in this one field (Gallery supports a single secret):
-    **Option A — two lines:** Line 1 = full MCP URL (e.g. `https://your-host/mcp`). Line 2 = bearer token (paste the raw token only; the script adds `Bearer `). Leave line 2 empty only if your endpoint needs no auth.
-    **Option B — one JSON object:** `{"mcp_url":"https://your-host/mcp","token":"your-token"}` (also accepts `url` / `mcpUrl` for the URL key).
+    **MCP URL only** — full Streamable HTTP endpoint (e.g. `https://your-host/mcp`).
+    Upstream API credentials (GitHub token, etc.) belong on the **ClawQL server** (`CLAWQL_BEARER_TOKEN` / deployment secrets), not in Gallery.
+    Optional JSON: `{"mcp_url":"https://your-host/mcp"}` (also accepts `url` / `mcpUrl`).
   homepage: https://github.com/danielsmithdevelopment/ClawQL
 ---
 
@@ -21,7 +21,7 @@ metadata:
 
 ## Instructions for the agent
 
-1. Ensure the **clawql** skill is enabled and the user has filled the **secret** (URL + token as described in metadata).
+1. Ensure the **clawql** skill is enabled and the user has set the **secret** to the **MCP URL** only (see metadata).
 2. Call the **`run_js`** tool with **`index.html`** and a **JSON string** in **`data`**:
 
 ### `action`: `"search"`
@@ -53,15 +53,15 @@ metadata:
 - **`fields`** (optional): response field hints for leaner output when supported.
 
 3. Parse the returned **`result`** string (JSON). It mirrors MCP **`CallToolResult`**: typically **`content`** (e.g. text parts with JSON bodies), and **`isError`** when the tool failed.
-4. **`search` before `execute`**. Ask the user for missing IDs, paths, or auth-related details. Do not echo the secret or full token.
+4. **`search` before `execute`**. Ask the user for missing IDs or paths. Do not put the MCP URL inside **`data`**; it stays in the skill secret only.
 
 ## Troubleshooting (user-visible)
 
 - **CORS errors**: configure the reverse proxy / ClawQL host to allow the app’s origin (or `*` for testing only).
-- **401/403**: check bearer token and gateway rules.
+- **401/403 on execute**: configure tokens on the **ClawQL deployment** (e.g. `CLAWQL_BEARER_TOKEN` in Kubernetes), not in the Gallery skill.
 - **GraphQL / execute**: upstream ClawQL still needs its GraphQL proxy for some execute paths; see [ClawQL README](https://github.com/danielsmithdevelopment/ClawQL/blob/main/README.md).
 
 ## Security
 
 - **`execute`** can perform real API calls. Confirm destructive operations with the user.
-- Never put the URL or token in the **`data`** JSON; only in the app secret field.
+- Never put the MCP URL in the **`data`** JSON; only in the app secret field. API credentials stay on the server.
