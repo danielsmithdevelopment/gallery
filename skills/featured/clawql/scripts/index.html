@@ -1,0 +1,234 @@
+<script>
+(function () {
+  const DEFAULT_PROTOCOL = "2024-11-05";
+
+  function parseSecret(raw) {
+    const s = (raw || "").trim();
+    if (!s) {
+      throw new Error("Missing secret. Add MCP URL and token in skill settings (see skill description).");
+    }
+    if (s.startsWith("{")) {
+      let o;
+      try {
+        o = JSON.parse(s);
+      } catch (e) {
+        throw new Error("Invalid JSON in secret. Use two lines (URL then token) or valid JSON.");
+      }
+      const url = String(o.mcp_url || o.mcpUrl || o.url || "").trim();
+      const token = String(o.token || o.bearer || "").trim();
+      if (!url) throw new Error('JSON secret must include a URL (mcp_url, mcpUrl, or url).');
+      return { mcpUrl: url, token };
+    }
+    const lines = s.split(/\r?\n/).map((l) => l.trim());
+    const url = (lines[0] || "").trim();
+    const token = lines.slice(1).join("\n").trim();
+    if (!url) throw new Error("First line of secret must be the full MCP URL (e.g. https://host/mcp).");
+    return { mcpUrl: url, token };
+  }
+
+  function authHeader(token) {
+    if (!token) return {};
+    const t = token.startsWith("Bearer ") ? token : "Bearer " + token;
+    return { Authorization: t };
+  }
+
+  function parseSseDataMessages(text) {
+    const out = [];
+    const lines = text.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.startsWith("data:")) {
+        const payload = line.slice(5).trim();
+        if (!payload) continue;
+        try {
+          out.push(JSON.parse(payload));
+        } catch (_) {
+          /* ignore non-JSON data lines */
+        }
+      }
+    }
+    return out;
+  }
+
+  async function mcpPost(mcpUrl, body, token, extraHeaders) {
+    const headers = Object.assign(
+      {
+        Accept: "application/json, text/event-stream",
+        "Content-Type": "application/json",
+      },
+      authHeader(token),
+      extraHeaders || {}
+    );
+    const res = await fetch(mcpUrl, {
+      method: "POST",
+      headers,
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+    const sessionHeader = res.headers.get("mcp-session-id") || res.headers.get("Mcp-Session-Id");
+    const text = await res.text();
+    const messages = parseSseDataMessages(text);
+    return { res, sessionHeader, text, messages };
+  }
+
+  function pickById(messages, id) {
+    for (let i = 0; i < messages.length; i++) {
+      if (messages[i] && messages[i].id === id) return messages[i];
+    }
+    return null;
+  }
+
+  async function runClawqlSession(mcpUrl, token, toolName, toolArgs) {
+    let rpcId = 0;
+    const nextId = () => ++rpcId;
+
+    const initId = nextId();
+    const initBody = {
+      jsonrpc: "2.0",
+      id: initId,
+      method: "initialize",
+      params: {
+        protocolVersion: DEFAULT_PROTOCOL,
+        capabilities: {},
+        clientInfo: { name: "gallery-clawql-skill", version: "1.0.0" },
+      },
+    };
+
+    const first = await mcpPost(mcpUrl, initBody, token, {});
+    if (!first.res.ok) {
+      throw new Error(
+        "initialize HTTP " + first.res.status + ": " + (first.text || "").slice(0, 500)
+      );
+    }
+
+    const sessionId =
+      first.sessionHeader ||
+      (function () {
+        const m = pickById(first.messages, initId);
+        return m && m.result && m.result.sessionId ? m.result.sessionId : null;
+      })();
+
+    const initMsg = pickById(first.messages, initId);
+    if (!initMsg || initMsg.error) {
+      const err = initMsg && initMsg.error ? initMsg.error.message : "no initialize result";
+      throw new Error("initialize failed: " + err);
+    }
+    const negotiated =
+      (initMsg.result && initMsg.result.protocolVersion) || DEFAULT_PROTOCOL;
+
+    if (!sessionId) {
+      throw new Error(
+        "No mcp-session-id from server after initialize. Check URL points to Streamable HTTP MCP (e.g. …/mcp)."
+      );
+    }
+
+    const sessionHeaders = {
+      "mcp-session-id": sessionId,
+      "mcp-protocol-version": negotiated,
+    };
+
+    const n2 = await mcpPost(
+      mcpUrl,
+      { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
+      token,
+      sessionHeaders
+    );
+    if (!n2.res.ok && n2.res.status !== 202) {
+      throw new Error("notifications/initialized HTTP " + n2.res.status);
+    }
+
+    const callId = nextId();
+    const callBody = {
+      jsonrpc: "2.0",
+      id: callId,
+      method: "tools/call",
+      params: { name: toolName, arguments: toolArgs || {} },
+    };
+
+    const third = await mcpPost(mcpUrl, callBody, token, sessionHeaders);
+    if (!third.res.ok) {
+      throw new Error(
+        "tools/call HTTP " + third.res.status + ": " + (third.text || "").slice(0, 800)
+      );
+    }
+
+    const callMsg = pickById(third.messages, callId);
+    if (!callMsg) {
+      return {
+        warning: "No JSON-RPC result with matching id in SSE body; raw excerpt follows.",
+        httpStatus: third.res.status,
+        sseExcerpt: (third.text || "").slice(0, 4000),
+        messages: third.messages,
+      };
+    }
+    if (callMsg.error) {
+      return {
+        isError: true,
+        error: callMsg.error,
+        jsonrpcId: callId,
+      };
+    }
+    return callMsg.result;
+  }
+
+  window["ai_edge_gallery_get_result"] = async (data, secret) => {
+    try {
+      const { mcpUrl, token } = parseSecret(secret);
+      const jsonData = JSON.parse(data || "{}");
+      const action = (jsonData.action || "").toLowerCase();
+
+      if (action === "search") {
+        const query = jsonData.query;
+        if (!query || typeof query !== "string") {
+          throw new Error('search requires string "query"');
+        }
+        const limit =
+          jsonData.limit != null ? Math.min(50, Math.max(1, Number(jsonData.limit))) : undefined;
+        const args = { query };
+        if (limit != null && !Number.isNaN(limit)) args.limit = limit;
+        const toolResult = await runClawqlSession(mcpUrl, token, "search", args);
+        return JSON.stringify({
+          result: JSON.stringify(
+            {
+              tool: "search",
+              callToolResult: toolResult,
+            },
+            null,
+            2
+          ),
+        });
+      }
+
+      if (action === "execute") {
+        const operationId = jsonData.operationId;
+        if (!operationId || typeof operationId !== "string") {
+          throw new Error('execute requires string "operationId"');
+        }
+        const args = jsonData.args;
+        if (args == null || typeof args !== "object" || Array.isArray(args)) {
+          throw new Error('execute requires object "args" (use {} if none)');
+        }
+        const toolArgs = { operationId, args };
+        if (Array.isArray(jsonData.fields)) toolArgs.fields = jsonData.fields;
+        const toolResult = await runClawqlSession(mcpUrl, token, "execute", toolArgs);
+        return JSON.stringify({
+          result: JSON.stringify(
+            {
+              tool: "execute",
+              callToolResult: toolResult,
+            },
+            null,
+            2
+          ),
+        });
+      }
+
+      throw new Error('data must include "action": "search" or "execute"');
+    } catch (e) {
+      console.error("clawql skill:", e);
+      return JSON.stringify({
+        error: e.message || String(e),
+      });
+    }
+  };
+})();
+</script>

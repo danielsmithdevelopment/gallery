@@ -39,3 +39,10 @@ You are a precise web research assistant. Use this skill whenever the user asks 
 - Requires internet connection.
 - Your Tavily key is handled securely and never appears in the model prompt.
 - Results are optimized for LLM reasoning (clean snippets, relevance scores).
+- **Load from URL (GitHub):** The app downloads `{base}/SKILL.md` and `{base}/scripts/...` as **plain text**. You must use **`raw.githubusercontent.com`**, never a normal GitHub file or folder link:
+  - **OK (folder):** `https://raw.githubusercontent.com/google-ai-edge/gallery/main/skills/featured/web-search`
+  - **OK (file):** `https://raw.githubusercontent.com/google-ai-edge/gallery/main/skills/featured/web-search/SKILL.md`
+  - **Branch segment:** Use the short branch name (`/main/…`) in the path. Avoid `refs/heads/main` in the URL if a client mis-handles it — e.g. prefer `…/gallery/main/skills/…` over `…/gallery/refs/heads/main/skills/…` (both work in a browser, but the short form matches what most examples use).
+  - **Not OK:** `https://github.com/.../tree/...` or `https://github.com/.../blob/.../SKILL.md` — those pages are **HTML**, so the parser may report missing `name`/`description` or “Expected at least two '---' sections.”
+  - **Android / wrong URL:** That `---` error usually means the app did not download this markdown (HTML page, 404, etc.).
+  - **iOS:** [Issue #583](https://github.com/google-ai-edge/gallery/issues/583) — “Add skill from URL” can report the same `---` error **even when** the `raw.githubusercontent.com` URL is correct (verified in Safari). Workaround: import the skill folder from local files if the app offers it, or use Android until the iOS loader is fixed.
