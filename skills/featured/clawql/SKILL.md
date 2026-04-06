@@ -3,10 +3,7 @@ name: clawql
 description: Call a remote ClawQL Streamable HTTP MCP server (search + execute) from the app via HTTP — same JSON-RPC tool results as native MCP, without embedding OpenAPI in chat. Use for GitHub, Jira, Cloudflare, GCP, Slack, Sentry, n8n, or custom OpenAPI specs the server was configured with.
 metadata:
   require-secret: true
-  require-secret-description: |
-    **MCP URL only** — full Streamable HTTP endpoint (e.g. `https://your-host/mcp`).
-    Upstream API credentials (GitHub token, etc.) belong on the **ClawQL server** (`CLAWQL_BEARER_TOKEN` / deployment secrets), not in Gallery.
-    Optional JSON: `{"mcp_url":"https://your-host/mcp"}` (also accepts `url` / `mcpUrl`).
+  require-secret-description: MCP URL only — paste the full Streamable HTTP endpoint (example https://your-host/mcp). Optional JSON form with keys mcp_url, url, or mcpUrl. If typed characters look invisible, tap the eye icon to show plain text. API keys for upstream APIs belong on the ClawQL server, not here.
   homepage: https://github.com/danielsmithdevelopment/ClawQL
 ---
 
@@ -57,6 +54,7 @@ metadata:
 
 ## Troubleshooting (user-visible)
 
+- **Edit secret dialog**: the field hides input by default. If nothing seems to appear while typing, tap the **eye** icon on the field to reveal plaintext (a known dark-theme visibility quirk in some builds).
 - **CORS errors**: configure the reverse proxy / ClawQL host to allow the app’s origin (or `*` for testing only).
 - **401/403 on execute**: configure tokens on the **ClawQL deployment** (e.g. `CLAWQL_BEARER_TOKEN` in Kubernetes), not in the Gallery skill.
 - **GraphQL / execute**: upstream ClawQL still needs its GraphQL proxy for some execute paths; see [ClawQL README](https://github.com/danielsmithdevelopment/ClawQL/blob/main/README.md).
